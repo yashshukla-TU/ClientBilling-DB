@@ -1,0 +1,731 @@
+
+
+-- Objects changed
+
+-- 0. ClientBillingRules:- Updated Site to NewSite
+
+UPDATE Rules  
+SET Rules.[site] = Locn.Site_NewName
+FROM CLIENTBILLINGRULES AS Rules
+JOIN DIMSITE AS Locn ON Locn.Site_OldName = Rules.[site] AND Locn.IsActive = 1;
+
+************************************************************************************************************
+
+-- 1. sp_RefreshDimEmployee :- Chnaged the source to Dim_Employee from v_utl_teleopti_billing_last_3_months
+ 
+ 
+CREATE PROC dbo.sp_RefreshDimEmployee        
+AS        
+BEGIN        
+ SET NOCOUNT ON        
+  
+   
+DROP TABLE IF EXISTS #EMP      
+      
+SELECT DISTINCT EmployeeNo, DisplayName, Email, 'admin'  [Inserted By]      
+INTO #Tmp_Names      
+FROM Dim_Employee Empl      
+WHERE Active = 1 AND EmployeeNo IS NOT NULL  
+  
+      
+ DECLARE @SummaryOfChanges TABLE(Change VARCHAR(255));        
+      
+        
+ MERGE INTO DimEmployee AS TargetTbl        
+ USING #Tmp_Names AS SourceTbl        
+ ON (TargetTbl.EID = SourceTbl.EmployeeNo)        
+ WHEN NOT MATCHED BY TARGET THEN         
+ INSERT ([EID],[Display_Name], Inserted_Date,Inserted_By, IsActive)        
+ VALUES        
+ (SourceTbl.EmployeeNo,Concat(SourceTbl.[DisplayName],' (',SourceTbl.EmployeeNo,')'),GETDATE(),'admin', 1)        
+ WHEN MATCHED AND (TargetTbl.[Display_Name] <> SourceTbl.[DisplayName])        
+ THEN UPDATE SET          
+  TargetTbl.Display_Name = Concat(SourceTbl.[DisplayName],' (',SourceTbl.EmployeeNo,')'),      
+  TargetTbl.Updated_by =  'DataRefresh',        
+  TargetTbl.Updated_Date = GETDATE()        
+ OUTPUT $action INTO @SummaryOfChanges;        
+        
+ SELECT Change, COUNT(*) AS CountPerChange FROM @SummaryOfChanges GROUP BY Change;         
+        
+ DROP TABLE #Tmp_Names        
+END 
+
+************************************************************************************************************
+-- 2. v_utl_teleopti_billing_last_3_months:-  Using Project id from DimProject
+
+  
+CREATE VIEW [dbo].[v_utl_teleopti_billing_last_3_months]    
+AS    
+(    
+ SELECT    
+  [ID] AS [id],     
+  [Name] AS [name],     
+  [EID] AS [eid],     
+  [TL] AS [tl],     
+  [Site] AS [site],     
+  [Campaign] AS [campaign],     
+  [LOB] AS [lob],     
+  [Date] AS [date],     
+  [PST Date] AS [pst_date],     
+  [Biometric Time In] AS [biometric_time_in],     
+  [Biometric Time Out] AS [biometrics_time_out],     
+  [TeleOpti Schedule start] AS [teleopti_schedule_start],     
+  [TeleOpti Schedule End] AS [teleopti_schedule_end],     
+  [Time Warp Log In] AS [timewarp_login],     
+  [Time Warp Log Out] AS [timewarp_logout],     
+  [TeleOpti Scheduled Overtime] AS [teleopti_scheduled_overtime],     
+  [Biometric Time Duration] AS [biometric_time_duration],     
+  [Teleopti Time Duration] AS [teleopti_time_duration],     
+  [TimeWarp Time Duration] AS [timewarp_time_duration],     
+  [Scheduled Time] AS [scheduled_time],     
+  [Scheduled Ready Time] AS [scheduled_ready_time],     
+  [Scheduled_Work_Time] AS [schedule_work_time],     
+  [Scheduled_Contract_Time] AS [scheduled_contract_time],     
+  [Scheduled_Time_Activity] AS [scheduled_time_activity],     
+  [Absence Hour] AS [absence_hour],     
+  [Overtime Hour] AS [overtime_hour],     
+  [Client Billable Time] AS [client_billable_time],     
+  [Productive Hour] AS [productive_hour],     
+  [Break Duration] AS [break_duration],     
+  [Lunch Duration] AS [lunch_duration],     
+  [Team Meetings Duration] AS [team_meetings_duration],     
+  [Bio Break Duration] AS [bio_break_duration],     
+  [TaskUs Training Duration] AS [taskus_training_duration],     
+  [Internal System Downtime Duration] AS [internal_system_downtime_duration],     
+  [Coaching & Development Duration] AS [coaching_and_development_duration],     
+  [Administrative Duration] AS [administrative_duration],     
+  [Client Training Duration] AS [client_training_duration],     
+  [Campaign Tools Downtime Duration] AS [campaign_tools_downtime_duration],     
+  [Date Created] AS [date_created],     
+  [Role] AS [role],     
+  [IS_NTLogin] AS [is_ntlogin],     
+  [Client Upskill Training] AS [client_upskill_training],     
+  [Daily Stand Up] AS [daily_stand_up],     
+  [Wellness / Counseling] AS [wellness_counseling],     
+  [Position] AS [position],     
+  B.Project_Id AS [project_id],     
+  [ProjectName] AS [project_name],     
+  [TO_daily_stand_up] AS [to_daily_stand_up],     
+  [TO_coaching_and_development] AS [to_coaching_and_development],     
+  [TO_welness] AS [to_wellness],     
+  [TO_team_meetings] AS [to_team_meetings],     
+  [TO_client_training] AS [to_client_training],     
+  [authorized_absence] AS [authorized_absence],     
+  [unauthorized_absence] AS [unauthorized_absence],     
+  [rest_day_flag] AS [rest_day_flag],     
+  [Status] AS [status],     
+  [TO_campaign_tools_downtime] AS [to_campaign_tools_downtime],     
+  [Timezone] AS [timezone],     
+  [Unauthorized_Absence_Hrs] AS [unauthorized_absence_hrs],     
+  [TL_ID] AS [tl_id],     
+  [OM_ID] AS [om_id],     
+  [OM_Name] AS [om_name],     
+  [SOM_ID] AS [som_id],     
+  [SOM_Name] AS [som_name],     
+  [OD_ID] AS [od_id],     
+  [OD_Name] AS [od_name],     
+  [Lactation Time] AS [lactation_time],     
+  [Clinic Time] AS [clinic_time],     
+  [Full/PartTime] AS [full_part_time],    
+  Authorized_Absence_Hrs AS [authorized_absence_hrs],    
+  JobManagementLevel AS [job_management_level],    
+  JobManagementLevelName AS [job_management_levelname],    
+  billable_aux_min,    
+  nonbillable_aux_min    
+ FROM    
+ dbo.RPT_BILLING A    
+ JOIN dbo.vw_DimProject B ON     
+ --The below construct is to remove the suffix from the project Id. Ex. "12345-2022-100-311" becomes "12345-2022-100"    
+ TRIM(REVERSE(SUBSTRING(REVERSE(A.[ProjectID]), CHARINDEX('-', REVERSE(A.[ProjectID]))+1, LEN(A.[ProjectID])))) = B.Project_Id     
+ AND B.IsActive = 1    
+ WHERE [date] BETWEEN CAST(DATEADD(M, -3, GETDATE()) AS DATE) AND CAST(GETDATE() AS DATE)    
+) 
+
+
+************************************************************************************************************
+
+-- 3. sp_InsertEmployeeAdjustments :- Removed Reverse logic.
+
+  
+CREATE PROC dbo.sp_InsertEmployeeAdjustments @StDate DATE = NULL, @EdDate DATE = NULL, @Client VARCHAR(225) = NULL    
+AS    
+BEGIN    
+ SET NOCOUNT ON    
+    
+ DECLARE @StartDate DATE, @EndDate DATE    
+    
+ IF @StDate IS NULL AND @EdDate IS NULL    
+  SELECT @StartDate = DATEADD(DAY, 1, EOMONTH(GETDATE(), -2)), @EndDate = EOMONTH(GETDATE(), -1)    
+ ELSE      
+  SELECT @StartDate = @StDate, @EndDate = @EdDate      
+    
+ /*    
+ When using the input Params of the proc directly in the queries was causing the proc to run terribly slow.    
+ The solution is to copy the parameters to local variables in the procedure, which I think makes SQL re-evaluate the execution plan for the query anytime it's run,     
+ so it picks the best execution plan for the parameters given instead of using an inappropriate cached plan for the query (Parameter Sniffing).    
+ */    
+    
+ SELECT     
+  DISTINCT    
+  eid,    
+  CONCAT([name], ' (', eid, ')') Employee,     
+  [date],    
+  CAST(NULL AS DATE) pst_date,    
+  B.Project_Id,    
+  B.Display_Name,    
+  B.Client,    
+  ISNULL(TRIM(lob),'') [lob],    
+  [position],    
+  CASE     
+  WHEN [position] IN ('Teammate', 'Teammate (Subject Matter Expert)') THEN 'Billable-Production'    
+  WHEN [position] IN ('Learning Experience Leader', 'Quality Analyst', 'Team Leader') THEN 'Billable-Support'    
+  ELSE 'NonBillable'    
+  END AS Billable_Category    
+ INTO #Tmp    
+ FROM dbo.v_utl_teleopti_billing_last_3_months A    
+ JOIN dbo.DimProject B ON     
+ A.project_id = B.Project_Id    
+ WHERE A.[Date] BETWEEN @StartDate AND @EndDate AND B.Client = ISNULL(@Client, B.Client) AND B.IsActive = 1    
+    
+ --SELECT * FROM #Tmp    
+     
+ DECLARE @SummaryOfChanges TABLE(Change VARCHAR(255));    
+    
+ MERGE INTO dbo.Employee_Adjustments AS TargetTbl    
+ USING #Tmp AS SourceTbl    
+ ON (TargetTbl.EID = SourceTbl.EID AND TargetTbl.[Date] = SourceTbl.[Date])    
+ --ON CONCAT(TargetTbl.EID, '|', TargetTbl.[Date]) = CONCAT(SourceTbl.EID, '|', SourceTbl.[Date]) --Another way to JOIN    
+ WHEN NOT MATCHED BY TARGET THEN     
+ INSERT     
+ (    
+  [EID], [Display_Name], [date], pst_date, [Project_Id], [Project_Name],     
+  [Client], lob, position,     
+  Billable_Category,     
+  inserted_by, updated_date, updated_by    
+ )    
+ VALUES     
+ (    
+  SourceTbl.eid, SourceTbl.Employee, SourceTbl.[date], SourceTbl.pst_date, SourceTbl.Project_Id, SourceTbl.Display_Name,    
+  SourceTbl.Client, ISNULL(TRIM(SourceTbl.lob), ''), SourceTbl.[position],    
+  CASE     
+   WHEN SourceTbl.[position] IN ('Teammate', 'Teammate (Subject Matter Expert)') THEN 'Billable-Production'    
+   WHEN SourceTbl.[position] IN ('Learning Experience Leader', 'Quality Analyst', 'Team Leader') THEN 'Billable-Support'    
+   ELSE 'NonBillable'    
+  END,    
+  'admin', NULL, NULL    
+ )    
+ WHEN MATCHED AND (TargetTbl.lob <> SourceTbl.lob OR TargetTbl.position <> SourceTbl.position)     
+ AND ISNULL(TargetTbl.updated_by, 'DataRefresh') = 'DataRefresh' /* This construct ensures that we don't overwrite any changes made by the users thru the PowerApps screen,    
+ as such records will have the user's email address in the update_by field. We have to update only fresh rows (update_by is null) or those rows    
+ where the values have changed in the source system but haven't been updated via PowerApps */    
+ THEN UPDATE SET    
+  TargetTbl.Project_Id = SourceTbl.Project_Id,    
+  TargetTbl.lob = SourceTbl.lob,    
+  TargetTbl.position = SourceTbl.position,    
+  TargetTbl.Billable_Category =    
+  CASE     
+   WHEN SourceTbl.[position] IN ('Teammate', 'Teammate (Subject Matter Expert)') THEN 'Billable-Production'    
+   WHEN SourceTbl.[position] IN ('Learning Experience Leader', 'Quality Analyst', 'Team Leader') THEN 'Billable-Support'    
+   ELSE 'NonBillable'    
+  END,--Added-End    
+  TargetTbl.updated_by = 'DataRefresh'    
+ OUTPUT $action INTO @SummaryOfChanges;    
+    
+ SELECT Change, COUNT(*) AS CountPerChange FROM @SummaryOfChanges GROUP BY Change;     
+END    
+
+
+************************************************************************************************************
+   
+
+-- 4. sp_ComputeBillingRevenue_Detail :- Using NewSite
+
+CREATE PROC [dbo].[sp_ComputeBillingRevenue_Detail]    
+@StDate DATE = NULL, @EdDate DATE = NULL, @Client VARCHAR(225) = NULL    
+AS    
+BEGIN    
+ SET NOCOUNT ON    
+    
+ DECLARE @StartDate DATE, @EndDate DATE    
+    
+ IF @StDate IS NULL AND @EdDate IS NULL    
+  SELECT @StartDate = DATEADD(DAY, 1, EOMONTH(GETDATE(), -2)), @EndDate = EOMONTH(GETDATE(), -1)    
+ ELSE    
+  SELECT @StartDate = @StDate, @EndDate = @EdDate    
+    
+ /*    
+ When using the input Params of the proc directly in the queries was causing the proc to run terribly slow.    
+ The solution is to copy the parameters to local variables in the procedure, which I think makes SQL re-evaluate the execution plan for the query anytime it's run,     
+ so it picks the best execution plan for the parameters given instead of using an inappropriate cached plan for the query (Parameter Sniffing).    
+ */    
+    
+ --Collect the raw data in a temp table    
+ SELECT * INTO #Raw FROM v_utl_teleopti_billing_last_3_months vtel WHERE vtel.[Date] BETWEEN @StartDate AND @EndDate    
+    
+   
+ SELECT    
+  vtel.[date], vtel.pst_date,     
+  vtel.project_id projid,    
+  vtel.eid, EAdj.Position, -- The Ops users might change Position value thru PowerApps screen. Hence that would be the latest value.     
+  vtel.[role], vtel.full_part_time,     
+  vtel.tl, vtel.tl_id,     
+  ISNULL(TRIM(EAdj.lob), '') lob,     
+  --ISNULL(NULLIF(TRIM(EAdj.lob), ''), 'Universal') lob,     
+  COALESCE(SM.Site_NewName, vtel.[site]) [Site], vtel.biometric_time_in, vtel.biometrics_time_out, vtel.biometric_time_duration,     
+  vtel.break_duration, vtel.absence_hour, vtel.overtime_hour, vtel.productive_hour, vtel.lunch_duration, vtel.team_meetings_duration,     
+  vtel.taskus_training_duration, vtel.internal_system_downtime_duration, vtel.coaching_and_development_duration, vtel.administrative_duration,     
+  vtel.client_training_duration, vtel.client_upskill_training, vtel.to_client_training, vtel.to_daily_stand_up, vtel.to_wellness,     
+  vtel.to_team_meetings, vtel.daily_stand_up, vtel.wellness_counseling, vtel.campaign_tools_downtime_duration, vtel.clinic_time,     
+  vtel.lactation_time, vtel.teleopti_schedule_start, vtel.teleopti_schedule_end, vtel.teleopti_scheduled_overtime, vtel.timewarp_login,     
+  vtel.timewarp_logout, vtel.timewarp_time_duration, vtel.nonbillable_aux_min, vtel.timezone, vtel.rest_day_flag, CAST(0 AS BIT) is_holiday,    
+  vtel.authorized_absence, vtel.unauthorized_absence,    
+    
+  Rates.grace_period_minutes, NULLIF(CAST(Rates.round_per_minutes AS FLOAT), 0) round_per_minutes,--The NULLIF is to avoid DIVIDE BY ZERO error when it is used below    
+  CAST(overtime_price_hr AS NUMERIC(5, 2)) overtime_price_hr, CAST(holiday_price_hr AS NUMERIC(5, 2)) holiday_price_hr, regular_price_hr,    
+  Rates.lower_max [max_hours], ISNULL(Rates.spillover_mins, 0)/60.0 [spillover_hours],    
+    
+  ISNULL(EAdj.Billable_Category, 'NonBillable') Billable_Category, CAST(NULL AS VARCHAR(500)) AS remarks,    
+      
+  --Additional fields    
+  CAST(NULL AS NUMERIC(5, 2)) ot_hours, CAST(NULL AS INT) late_login, CAST(NULL AS INT) early_logout, CAST(NULL AS DATETIME) adjusted_tw_start_time,     
+  CAST(NULL AS NUMERIC(5, 2)) adjusted_log_hours, CAST(NULL AS NUMERIC(5, 2)) loggedhrs_less_nonbill,     
+  CAST(NULL AS NUMERIC(5, 2)) loggedhrs_less_nonbill_less_ot, CAST(NULL AS NUMERIC(5, 2)) loggedhrs_less_nonbill_less_ot_capped,     
+  CAST(NULL AS NUMERIC(5, 2)) holiday_hours, CAST(NULL AS NUMERIC(5, 2)) regular_hours,     
+  CAST(NULL AS NUMERIC(5, 2)) total_billing_hours, CAST(NULL AS NUMERIC(6, 2)) total_billing_amount    
+ INTO #BaseData     
+ FROM #Raw vtel    
+ JOIN DimProject P ON vtel.project_id = P.Project_Id AND P.Client = ISNULL(@Client, P.Client) AND P.IsActive = 1     
+ JOIN dbo.Employee_Adjustments EAdj ON vtel.eid = EAdj.EID AND vtel.[Date] = EAdj.[Date]    
+ LEFT JOIN dbo.DimSite SM ON SM.Site_NewName = vtel.[site] AND vtel.[Date] BETWEEN SM.[Start_Date] AND SM.End_Date     
+ --This above JOIN is added because some records (not all) come with the new naming for sites. And our look up tables use the Old names for Sites.    
+ LEFT JOIN dbo.ClientBillingRules Rates ON     
+  Rates.projid = vtel.project_id    
+  AND vtel.[Date] BETWEEN Rates.[start_date] AND Rates.[end_date]    
+  AND COALESCE(SM.Site_NewName, vtel.[site]) = Rates.[Site] AND EAdj.[position] = Rates.[position]    
+  --AND ISNULL(NULLIF(TRIM(EAdj.lob), ''), 'Universal') = Rates.LOB    
+  AND ISNULL(TRIM(EAdj.lob), '') = Rates.LOB    
+  AND Rates.billability_category = EAdj.Billable_Category    
+     
+    
+ --Update holiday flag    
+ UPDATE A SET is_holiday = 1 FROM #BaseData A JOIN dbo.Holidays B     
+ ON A.projid = B.project_id AND A.[Date] = B.TheDate AND TRIM(A.lob) = ISNULL(TRIM(B.lob), '') AND A.[site] = B.[site]    
+    
+ UPDATE #BaseData     
+ SET     
+ ot_hours = CASE WHEN overtime_hour < teleopti_scheduled_overtime THEN ISNULL(overtime_hour, 0) ELSE ISNULL(teleopti_scheduled_overtime, 0) END,    
+ late_login = CASE WHEN DATEDIFF(N, teleopti_schedule_start, timewarp_login) > 0 THEN DATEDIFF(N, teleopti_schedule_start, timewarp_login) END, -- Employee logged in later than the scheduled in time    
+ early_logout = CASE WHEN DATEDIFF(N, timewarp_logout, teleopti_schedule_end) > 0 THEN DATEDIFF(N, timewarp_logout, teleopti_schedule_end) END -- Employee logged out before the scheduled out time    
+    
+ --Calculate Adjusted Start Time (from TimeWarp Login)    
+ UPDATE #BaseData     
+ SET adjusted_tw_start_time =     
+ CASE     
+  WHEN late_login > 0 THEN -- Employee logged in late    
+   CASE     
+    WHEN late_login <= grace_period_minutes THEN     
+     DATEADD(N, FLOOR(DATEDIFF(N, 0, timewarp_login) / round_per_minutes)*round_per_minutes, 0)    
+    ELSE DATEADD(N, CEILING(DATEDIFF(N, 0, timewarp_login) / round_per_minutes)*round_per_minutes, 0)    
+   END    
+  /*    
+  ELSE -- Employee logged in early    
+   DATEADD(N, ROUND(DATEDIFF(N, 0, timewarp_login) / round_per_minutes, 0)*round_per_minutes, 0)    
+  */    
+  ELSE timewarp_login --Grace time is to be checked for late comers only. For early birds & on-time employees, the concept of 'Grace Time' does not apply.    
+ END    
+    
+ --Adjusted log hours    
+ UPDATE #BaseData SET adjusted_log_hours = ISNULL(DATEDIFF(N, adjusted_tw_start_time, timewarp_logout)/60.0, 0)    
+    
+ /*    
+ If Adjusted hours is NULL^^, TimeWarpDuration is considered.    
+ ^^ This can happen because the calculation uses grace_period_minutes, round_per_minutes, etc. which have to come from     
+ ClientBillingRules table. If there is no match those values will be NULL and hence the final Adjusted Hours also be NULL    
+ */    
+ UPDATE #BaseData SET adjusted_log_hours = timewarp_time_duration WHERE ISNULL(adjusted_log_hours, 0) = 0 AND ISNULL(timewarp_time_duration, 0) <> 0    
+    
+ -- Hours to be logeed hours less non-billable, logged hours less non-billable and less OT    
+ UPDATE #BaseData SET     
+ loggedhrs_less_nonbill =     
+ CASE     
+  WHEN adjusted_log_hours > ISNULL(nonbillable_aux_min/60.0, 0) THEN (adjusted_log_hours - ISNULL(nonbillable_aux_min/60.0, 0))     
+  ELSE 0     
+ END,     
+ loggedhrs_less_nonbill_less_ot =     
+ CASE     
+  WHEN adjusted_log_hours > (ISNULL(nonbillable_aux_min/60.0, 0) + ot_hours) THEN (adjusted_log_hours - ISNULL(nonbillable_aux_min/60.0, 0) - ot_hours)     
+  ELSE 0     
+ END    
+    
+ -- Applying the max hours (from the Client Billing Rules) cap    
+ UPDATE #BaseData SET     
+ loggedhrs_less_nonbill_less_ot_capped =     
+ CASE    
+  WHEN loggedhrs_less_nonbill_less_ot > (max_hours + spillover_hours) THEN (max_hours + spillover_hours)    
+  ELSE loggedhrs_less_nonbill_less_ot    
+ END    
+    
+ -- Holiday hours    
+ UPDATE #BaseData SET holiday_hours = CASE WHEN is_holiday = 1 THEN loggedhrs_less_nonbill_less_ot_capped ELSE 0 END    
+ -- Regular hours    
+ UPDATE #BaseData SET regular_hours = CASE WHEN is_holiday = 0 THEN loggedhrs_less_nonbill_less_ot_capped ELSE 0 END    
+ /*    
+ If employee worked on his/her Rest Day, the entire [TW Duration less NonBillable Time] is taken as Overtime. Max Hours cap from Client Rules is still applied.    
+ However, if a day is a Holiday and yet the day is tagged as a Rest Day as well, the hours worked that day are taken as Holiday Hours.     
+ In other words, the Holiday flag is given preference over the Rest Day flag. Hence we check is_holiday = 0 in addition to checking the rest day flag.    
+ */    
+ UPDATE #BaseData SET ot_hours =      
+ CASE    
+  WHEN loggedhrs_less_nonbill > (max_hours + spillover_hours) THEN (max_hours + spillover_hours)    
+  ELSE loggedhrs_less_nonbill    
+ END,    
+ regular_hours = 0, holiday_hours = 0    
+ WHERE (rest_day_flag = 'Rest Day' AND is_holiday = 0)    
+    
+ -- Total Billing Hours    
+ UPDATE #BaseData SET total_billing_hours = regular_hours + ot_hours + holiday_hours    
+ UPDATE #BaseData SET total_billing_amount = (regular_hours*regular_price_hr) + (ot_hours*overtime_price_hr) + (holiday_hours*holiday_price_hr)    
+    
+ -- Client should not be billed if any of the below conditions are true (even if there is logged hours > 0)    
+ UPDATE #BaseData SET total_billing_hours = 0, total_billing_amount = 0/*, remarks = 'Missing Timewarp Punch'*/ WHERE (timewarp_login IS NULL OR timewarp_logout IS NULL)    
+ UPDATE #BaseData SET total_billing_hours = 0, total_billing_amount = 0/*, remarks = 'NonBillable Position or Ops-set NonBillable'*/ WHERE Billable_Category = 'NonBillable'    
+    
+ --Update error codes    
+ -- Error Code 1    
+ UPDATE #BaseData SET Remarks = '1-No LogIn' WHERE Timewarp_Login IS NULL AND timewarp_logout IS NOT NULL    
+    
+ -- Error Code 2    
+ UPDATE #BaseData SET Remarks = '2-No LogOut' WHERE Timewarp_Login IS NOT NULL AND timewarp_logout IS NULL    
+    
+ --Error Code 3    
+ UPDATE #BaseData SET Remarks = '3-No LogIn & LogOut' WHERE Timewarp_Login IS NULL AND Timewarp_Logout IS NULL    
+    
+ --Error Code 4    
+ UPDATE #BaseData SET Remarks = '4-TW LogIn >3 hrs after scheduled shift start'    
+ WHERE DATEDIFF(MINUTE, teleopti_schedule_start, Timewarp_Login)/60.0 > 3.0    
+    
+ --Error Code 5    
+ UPDATE #BaseData SET Remarks = '5-TW LogOut >3 hrs before scheduled shift end'    
+ WHERE DATEDIFF(MINUTE, Teleopti_Schedule_End, Timewarp_Logout)/60.0 < -3.0    
+    
+ /*To be checked with Yash    
+ -- Error Code 6    
+ UPDATE #BaseData SET Remarks = '6-TW Login/LogOut >3 hrs diff from shift schedule'    
+ WHERE ABS(DATEDIFF(MINUTE,Teleopti_Schedule_Start,Teleopti_Schedule_End)/60.0 - DATEDIFF(MINUTE,Timewarp_Login,Timewarp_Logout)/60.0)    
+  > 3.0    
+  */    
+    
+  --Error Code 7    
+ UPDATE #BaseData SET Remarks = '7-RD/PL/UL with TW Logs'    
+ WHERE (Rest_Day_Flag IS NOT NULL OR authorized_absence IS NOT NULL OR unauthorized_absence IS NOT NULL) AND     
+  (Timewarp_Login IS NOT NULL OR Timewarp_Logout IS NOT NULL)    
+    
+ --Error Code 8    
+ UPDATE #BaseData SET Remarks = '8-TW OT > scheduled OT' WHERE overtime_hour > Teleopti_Scheduled_Overtime    
+    
+ --Error Code 9    
+ UPDATE #BaseData SET Remarks = '9-TW OT < scheduled OT' WHERE Overtime_Hour < Teleopti_Scheduled_Overtime    
+    
+ -- Error Code 10    
+ UPDATE #BaseData SET Remarks = '10-TW OT > 2 hrs' WHERE Overtime_Hour > 2.0;    
+    
+ -- Error Code 11    
+ WITH Multi_shift AS (    
+ SELECT eid, [DATE], CAST(teleopti_schedule_start AS DATE) [TO Date], COUNT(*) [Count] FROM #BaseData    
+ --WHERE Teleopti_Schedule_Start_Time is not null and Teleopti_Schedule_End is not null    
+ GROUP BY eid, [DATE], CAST(teleopti_schedule_start AS DATE)    
+ HAVING COUNT(*) > 1    
+ )     
+ UPDATE #BaseData     
+ SET Remarks = '11-Multiple schedules'    
+ FROM #BaseData    
+ JOIN Multi_shift ON     
+ Multi_shift.eid = #BaseData.eid AND Multi_shift.Date = #BaseData.date AND  Multi_shift.[TO Date] = CAST(#BaseData.Teleopti_Schedule_Start AS DATE)    
+    
+ --Error Code 12    
+ UPDATE #BaseData SET Remarks = '12-NonBillable Position or Ops-set NonBillable' WHERE Billable_Category = 'NonBillable';    
+ -- END of Error Codes update    
+    
+ --Delete the already existing data for the same timeframe, client    
+ DELETE BRD FROM dbo.BillingRevenue_Detail BRD    
+ JOIN DimProject DP ON DP.Project_Id = BRD.Project_Id AND DP.Client = ISNULL(@Client, DP.Client)    
+ WHERE BRD.[Date] BETWEEN @StartDate AND @EndDate    
+    
+ --Insert fresh data    
+ INSERT INTO dbo.BillingRevenue_Detail    
+ SELECT     
+  [Date], eid [Employee_ID], projid [Project_Id], LOB, [Site],     
+  pst_date AS [PST_Date],     
+  position AS [Position],     
+  CASE     
+   WHEN [Position] IN ('Teammate', 'Teammate (Subject Matter Expert)') THEN 'Billable-Production'    
+   WHEN [Position] IN ('Learning Experience Leader', 'Quality Analyst', 'Team Leader') THEN 'Billable-Support'    
+  END AS [Initial_Billable_Status],    
+  Billable_Category AS [Final_Billable_Status], --This is from the Employee_Adjustment, which could have been updated by the Ops team.    
+  role AS [Role],     
+  full_part_time AS [Full_Part_Time],     
+  tl AS [Team_Leader],     
+  tl_id AS [Team_Leader_Employee_ID],     
+  CAST(NULL AS VARCHAR(100)) AS [Delivery_Country],     
+  timezone AS [Time_Zone],     
+  biometric_time_in AS [Biometric_Time_In],     
+  biometrics_time_out AS [Biometric_Time_Out],     
+  biometric_time_duration AS [Biometric_Time_Duration],     
+  break_duration AS [Break_Duration],     
+  absence_hour AS [Absence_Hours],     
+  overtime_hour AS [Overtime_Hours],     
+  productive_hour AS [Productive_Hours],     
+  lunch_duration AS [Lunch_Duration],     
+  team_meetings_duration AS [Team_Meeting_Duration],     
+  taskus_training_duration AS [TaskUs_Training_Duration],     
+  internal_system_downtime_duration AS [Internal_System_Downtime_Duration],     
+  coaching_and_development_duration AS [Coaching_and_Development_Duration],     
+  administrative_duration AS [Administrative_Duration],     
+  client_training_duration AS [Client_Training_Duration],     
+  client_upskill_training AS [Client_Upskill_Training_Duration],     
+  to_client_training AS [To_Client_Training],     
+  to_daily_stand_up AS [To_Daily_StandUp],     
+  to_wellness AS [To_Wellness],     
+  to_team_meetings AS [To_Team_Meetings],     
+  daily_stand_up AS [Daily_Standup_Duration],     
+  wellness_counseling AS [Wellness_Counseling],     
+  campaign_tools_downtime_duration AS [Campaign_Tools_Downtime_Duration],     
+  clinic_time AS [Clinic_Time_Duration],     
+  lactation_time AS [Lactation_Time_Duration],     
+  teleopti_schedule_start AS [Teleopti_Schedule_Start_Time],     
+  teleopti_schedule_end AS [Teleopti_Schedule_End],     
+  teleopti_scheduled_overtime AS [Teleopti_Scheduled_Overtime],     
+  timewarp_login AS [Timewarp_Login],     
+  timewarp_logout AS [Timewarp_Logout],     
+  timewarp_time_duration AS [Timewarp_Time_Duration],     
+  adjusted_log_hours AS [Adjusted_Timewarp_Time_Duration],    
+  [max_hours] AS [Max_Hours],     
+  nonbillable_aux_min/60.0 AS [Non_Billable_Hours],     
+  ot_hours AS [OT_Hours],     
+  regular_hours AS [Regular_Hours],     
+  holiday_hours AS [Holiday_Billable_Hours],     
+  regular_price_hr AS [Regular_Price_Hour],     
+  regular_hours*regular_price_hr AS [Regular_Billing_Amount],     
+  rest_day_flag AS [Rest_Day_Flag],     
+  is_holiday [Holiday_Flag],    
+  loggedhrs_less_nonbill AS [Total_Time_Less_NonBillable_Time], --This is just another data point    
+  total_billing_hours AS [Total_Billing_Hours],    
+  total_billing_amount AS [Total_Billing_Amount],    
+  remarks AS [Remarks]    
+ --INTO dbo.BillingRevenue_Detail    
+ FROM #BaseData    
+    
+ DROP TABLE #BaseData    
+ DROP TABLE #Raw    
+END    
+
+
+************************************************************************************************************
+   
+-- 5. sp_ComputeBillingRevenue_Summary :- No Change
+
+CREATE PROC dbo.sp_ComputeBillingRevenue_Summary @StartDate DATE = NULL, @Client VARCHAR(225) = NULL  
+AS  
+BEGIN  
+ SET NOCOUNT ON  
+  
+ DECLARE @StDate DATE  
+  
+ IF @StartDate IS NULL  
+  SET @StDate = DATEADD(DAY, 1, EOMONTH(GETDATE(), -2))  
+ ELSE  
+  SET @StDate = @StartDate  
+  
+ /*  
+ When using the input Params of the proc directly in the queries was causing the proc to run terribly slow.  
+ The solution is to copy the parameters to local variables in the procedure, which I think makes SQL re-evaluate the execution plan for the query anytime it's run,   
+ so it picks the best execution plan for the parameters given instead of using an inappropriate cached plan for the query (Parameter Sniffing).  
+ */  
+  
+ IF OBJECT_ID('tempdb..#ClientRules') IS NOT NULL  
+  DROP TABLE #ClientRules  
+  
+ --Gather the client config params for the given month  
+ SELECT  
+  DP.Client [Client], [Project ID], LOB_Alias, LOB, [Site], [Position], [Billability Category], [Start Date], ISNULL([End Date], '2999-12-31') AS [End Date],  
+  FORMAT(@StDate, 'yyyyMM') [Year Month Id], FORMAT(@StDate, 'yyyy-MMM') [Year Month Name], [Billable Headcount], [Working Days in a Month],  
+  [Lower Max], ISNULL(([Billable Headcount]*[Working Days in a Month]*[Lower Max]), 0) AS [Max Contract Bill Hours], [Holiday Price per Hour],  
+  [Overtime Price per Hour], [Regular Price per Hour]  
+ INTO #ClientRules  
+ FROM vw_ClientBillingRules CBR  
+ JOIN DimProject DP ON DP.Project_Id = CBR.[Project ID] AND DP.Client = ISNULL(@Client, DP.Client) AND DP.IsActive = 1  
+  
+ --WHERE (@StDate >= [Start Date] OR EOMONTH(@StDate) <= ISNULL([End Date], '2999-12-31'))  
+ --This WHERE construct works for a maximum of only one change (i.e., 2 rows) within a month. Need to find a way if there are more than 2 rows.  
+ WHERE (@StDate >= [Start Date] AND EOMONTH(@StDate) <= ISNULL([End Date], '2999-12-31'))  
+ /*  
+ Hari changed the operator in the above construct to AND from OR, on 3-Nov.   
+ This works well in cases where the start date is 1st of month & end date is last date of the month.  
+ Need to check further to see how to make it work in case where the rates change within a month.  
+ */  
+  
+ --Gather the serviced hours for the given month.  
+ IF OBJECT_ID('tempdb..#BillRevenue') IS NOT NULL  
+  DROP TABLE #BillRevenue  
+  
+ SELECT   
+  CR.[Start Date] AS ClientRules_Applied_Start, CR.[End Date] AS ClientRules_Applied_End, BR.[Project Id],  
+  BR.[Final Billable Status] AS [Billing Category], ISNULL(BR.LOB, '') AS LOB, BR.Position, BR.[Site],  
+  ISNULL(SUM(BR.[Holiday Billable Hours]), 0) AS [Holiday Billable Hours], ISNULL(SUM(BR.[OT Hours]), 0) AS [OT Billable Hours],   
+  ISNULL(SUM(BR.[Regular Hours]), 0) AS [Regular Hours]  
+ INTO #BillRevenue  
+ FROM vw_BillingRevenue BR  
+ JOIN #ClientRules CR ON BR.[Date] BETWEEN @StDate AND EOMONTH(@StDate)  
+ --The above JOIN is necessary for getting the ClientRules_Applied_Start & ClientRules_Applied_End, which is necessary for picking the right billing rate.  
+ AND BR.[Project Id] = CR.[Project ID] AND BR.[Final Billable Status] = CR.[Billability Category] AND ISNULL(BR.LOB, '') = CR.lob AND BR.Position = CR.position AND BR.Site = CR.Site  
+ GROUP BY   
+  CR.[Start Date], CR.[End Date], BR.[Project Id], BR.[Final Billable Status], ISNULL(BR.LOB, ''), BR.Position, BR.[Site]  
+  
+ IF OBJECT_ID('tempdb..#OTAdjustments') IS NOT NULL  
+  DROP TABLE #OTAdjustments  
+  
+ SELECT  
+  Year_Month_Id, Project_Id, LOB, [Site], Position, Billable_Category, OT_Hours_Timewarp, OT_Hours_ClientApproved_Premium,   
+  ISNULL(OT_Hours_Timewarp, 0) - ISNULL(OT_Hours_ClientApproved_Premium, 0) [Unapproved_OT]  
+ INTO #OTAdjustments  
+ FROM Overtime_Adjustments WHERE Year_Month_Id = FORMAT(@StDate, 'yyyyMM')  
+  
+ --SELECT * FROM #ClientRules  
+ --SELECT * FROM #BillRevenue  
+ --SELECT * FROM #OTAdjustments  
+  
+ IF OBJECT_ID('tempdb..#BillRevSum') IS NOT NULL  
+  DROP TABLE #BillRevSum  
+  
+ SELECT *, CAST(NULL AS VARCHAR(255)) AS LOB_Alias INTO #BillRevSum FROM BillingRevenue_Summary WHERE 1 = 2  
+  
+ INSERT INTO #BillRevSum  
+ (  
+  Year_Mon_Id, Year_Mon_Name, ClientRules_Applied_Start, ClientRules_Applied_End, Project_Id, Billability_Category, LOB, LOB_Alias,  
+  [Site], Position, Max_Billable_Headcount, Max_Contract_Bill_Hours, Serviced_Holiday_Hours, Serviced_Overtime_Hours, Serviced_Regular_Hours,   
+  Holiday_Price_Hour, Overtime_Price_Hour, Regular_Price_Hour  
+ )  
+ SELECT  
+  CR.[Year Month Id], CR.[Year Month Name], BR.ClientRules_Applied_Start, BR.ClientRules_Applied_End, CR.[Project ID], CR.[Billability Category], CR.LOB, ISNULL(CR.LOB_Alias, CR.LOB) AS LOB_Alias,  
+  CR.[Site], CR.Position, CR.[Billable Headcount], CR.[Max Contract Bill Hours], BR.[Holiday Billable Hours], BR.[OT Billable Hours], BR.[Regular Hours],   
+  CR.[Holiday Price per Hour], CR.[Overtime Price per Hour], CR.[Regular Price per Hour]  
+ FROM #ClientRules CR JOIN #BillRevenue BR  
+ ON BR.[Project Id] = CR.[Project ID] AND BR.[Billing Category] = CR.[Billability Category] AND BR.LOB = CR.lob AND BR.Position = CR.position AND BR.[Site] = CR.[Site]  
+ AND CR.[Start Date] = BR.ClientRules_Applied_Start AND CR.[End Date] = BR.ClientRules_Applied_End  
+  
+ /*  
+ Max_Contract_Bill_Hours is the client approved hours; we must not bill beyond that.   
+ The cap is applicable only for 'Hours' and not the 'Amount'. Hence, to maximze the billing potential, the below method & order is used.  
+ First we bill the holiday hours, which is at a premium rate. Then overtime rate, which again might be a premium billing.   
+ Then finally whatever is left after billing at the above said bucket are billed at regular rate as regular hours.  
+ */  
+ UPDATE #BillRevSum SET Billable_Holiday_Hours =    
+ CASE WHEN Serviced_Holiday_Hours < Max_Contract_Bill_Hours THEN Serviced_Holiday_Hours ELSE Max_Contract_Bill_Hours END  
+ WHERE Year_Mon_Id = FORMAT(@StDate, 'yyyyMM')  
+  
+ --Client approved OT is always over & above the Max Contracted Hours. Hence no need to check for Max hours  
+ UPDATE BS SET BS.Billable_Premium_Overtime_Hours = ISNULL(OA.OT_Hours_ClientApproved_Premium, 0)  
+ FROM #BillRevSum BS LEFT JOIN #OTAdjustments OA ON  
+ BS.Project_Id = OA.[Project_ID] AND BS.Billability_Category = OA.[Billable_Category] AND ISNULL(BS.LOB, '') = TRIM(OA.LOB) AND BS.Position = OA.Position AND BS.[Site] = OA.[Site]  
+ WHERE Year_Mon_Id = FORMAT(@StDate, 'yyyyMM')  
+  
+ --(Max_Contract_Bill_Hours - Billable_Holiday_Hours) is what would be the remainder, after billing the holiday hours.  
+ UPDATE #BillRevSum SET Billable_Regular_Hours =   
+ CASE WHEN Serviced_Regular_Hours < (Max_Contract_Bill_Hours - Billable_Holiday_Hours) THEN Serviced_Regular_Hours ELSE (Max_Contract_Bill_Hours - Billable_Holiday_Hours) END  
+ WHERE Year_Mon_Id = FORMAT(@StDate, 'yyyyMM')  
+  
+ --If there are any Unaproved OT hours (aka. Regular OT Hours), utilize them in case we have not met the max contracted hours.  
+ UPDATE #BillRevSum SET Billable_Regular_Overtime_Hours =   
+ CASE   
+  WHEN (Billable_Holiday_Hours + Billable_Regular_Hours) < Max_Contract_Bill_Hours THEN  
+   CASE WHEN (Billable_Holiday_Hours + Billable_Regular_Hours + Unapproved_OT) > Max_Contract_Bill_Hours  
+   THEN  
+    Max_Contract_Bill_Hours - (Billable_Holiday_Hours + Billable_Regular_Hours)  
+   ELSE  
+    ISNULL(Unapproved_OT, 0)  
+   END  
+  ELSE 0  
+ END  
+ FROM #BillRevSum BS LEFT JOIN #OTAdjustments OA ON  
+ BS.Project_Id = OA.[Project_ID] AND BS.Billability_Category = OA.[Billable_Category] AND ISNULL(BS.LOB, '') = TRIM(OA.LOB) AND BS.Position = OA.Position AND BS.[Site] = OA.[Site]  
+ WHERE Year_Mon_Id = FORMAT(@StDate, 'yyyyMM')  
+  
+ --Any remaining serviced hours after billing at the above buckets, is shown as additional hours. We cannot bill these hours.  
+ UPDATE #BillRevSum SET Serviced_Additional_Hours =   
+ CASE   
+  WHEN (Billable_Holiday_Hours + Billable_Regular_Hours + Billable_Regular_Overtime_Hours) > Max_Contract_Bill_Hours THEN   
+   (Billable_Holiday_Hours + Billable_Regular_Hours + Billable_Regular_Overtime_Hours) - Max_Contract_Bill_Hours  
+  ELSE 0   
+ END  
+ WHERE Year_Mon_Id = FORMAT(@StDate, 'yyyyMM')  
+  
+ UPDATE #BillRevSum   
+ SET   
+  Total_Billing_Hours_Invoiced = (Billable_Holiday_Hours + Billable_Regular_Hours + Billable_Premium_Overtime_Hours + Billable_Regular_Overtime_Hours),  
+  Holiday_Hours_Billing_Amount = ROUND((Billable_Holiday_Hours * Holiday_Price_Hour), 2),  
+  Regular_Hours_Billing_Amount = ROUND((Billable_Regular_Hours * Regular_Price_Hour), 2),  
+  Premium_Overtime_Hours_Billing_Amount = ROUND((Billable_Premium_Overtime_Hours * Overtime_Price_Hour), 2),   
+  Regular_Overtime_Hours_Billing_Amount = ROUND((Billable_Regular_Overtime_Hours * Regular_Price_Hour), 2)  
+ WHERE Year_Mon_Id = FORMAT(@StDate, 'yyyyMM')  
+  
+ UPDATE #BillRevSum SET Total_Billing_Amount = ROUND((Holiday_Hours_Billing_Amount + Premium_Overtime_Hours_Billing_Amount + Regular_Hours_Billing_Amount + Regular_Overtime_Hours_Billing_Amount), 2)  
+ WHERE Year_Mon_Id = FORMAT(@StDate, 'yyyyMM')  
+  
+ --SELECT * FROM #BillRevSum  
+  
+ --Delete data from Summary table for the given Client or as a whole, depending upon the input parameter value.  
+ DELETE BRS FROM BillingRevenue_Summary BRS  
+ JOIN DimProject DP ON DP.Project_Id = BRS.Project_Id AND DP.IsActive = 1  
+ WHERE Year_Mon_Id IN (SELECT [Year Month Id] FROM #ClientRules) AND DP.Client = ISNULL(@Client, DP.Client);  
+  
+ INSERT INTO BillingRevenue_Summary  
+ (  
+  Year_Mon_Id, Year_Mon_Name, ClientRules_Applied_Start, ClientRules_Applied_End, Project_Id, Billability_Category, LOB, [Site], Position,   
+  Max_Billable_Headcount, Max_Contract_Bill_Hours, Serviced_Holiday_Hours, Serviced_Overtime_Hours, Serviced_Regular_Hours,   
+  Serviced_Additional_Hours, Billable_Holiday_Hours, Billable_Premium_Overtime_Hours, Billable_Regular_Hours, Billable_Regular_Overtime_Hours,   
+  Total_Billing_Hours_Invoiced, Holiday_Hours_Billing_Amount, Premium_Overtime_Hours_Billing_Amount, Regular_Hours_Billing_Amount,   
+  Regular_Overtime_Hours_Billing_Amount, Total_Billing_Amount   
+ )  
+ SELECT   
+  Year_Mon_Id, Year_Mon_Name, ClientRules_Applied_Start, ClientRules_Applied_End, Project_Id, Billability_Category, LOB_Alias, [Site], Position,   
+  SUM(Max_Billable_Headcount), SUM(Max_Contract_Bill_Hours), SUM(Serviced_Holiday_Hours), SUM(Serviced_Overtime_Hours), SUM(Serviced_Regular_Hours),   
+  SUM(Serviced_Additional_Hours), SUM(Billable_Holiday_Hours), SUM(Billable_Premium_Overtime_Hours), SUM(Billable_Regular_Hours), SUM(Billable_Regular_Overtime_Hours),   
+  SUM(Total_Billing_Hours_Invoiced), SUM(Holiday_Hours_Billing_Amount), SUM(Premium_Overtime_Hours_Billing_Amount), SUM(Regular_Hours_Billing_Amount),   
+  SUM(Regular_Overtime_Hours_Billing_Amount), SUM(Total_Billing_Amount)  
+ FROM   
+  #BillRevSum  
+ GROUP BY   
+  Year_Mon_Id, Year_Mon_Name, ClientRules_Applied_Start, ClientRules_Applied_End, Project_Id, Billability_Category, LOB_Alias, [Site], Position  
+END  
+
+-- PROCEDURESTO RUN
+
+
+dbo.sp_ComputeBillingRevenue_Detail '2023-06-01', '2023-06-30'
+EXEC sp_Insert_Overtime_Adjustments '2023-06-01'
+EXEC dbo.sp_ComputeBillingRevenue_Summary '2023-06-01'
+
+
+dbo.sp_ComputeBillingRevenue_Detail '2023-05-01', '2023-05-31'
+EXEC sp_Insert_Overtime_Adjustments '2023-05-01'
+EXEC dbo.sp_ComputeBillingRevenue_Summary '2023-05-01'
+
+
+dbo.sp_ComputeBillingRevenue_Detail '2023-04-01', '2023-04-30'
+EXEC sp_Insert_Overtime_Adjustments '2023-04-01'
+EXEC dbo.sp_ComputeBillingRevenue_Summary '2023-04-01'
+
+
+dbo.sp_ComputeBillingRevenue_Detail '2023-03-01', '2023-03-31'
+EXEC sp_Insert_Overtime_Adjustments '2023-03-01'
+EXEC dbo.sp_ComputeBillingRevenue_Summary '2023-03-01'
+
+dbo.sp_ComputeBillingRevenue_Detail '2023-02-01', '2023-02-28'
+EXEC sp_Insert_Overtime_Adjustments '2023-02-01'
+EXEC dbo.sp_ComputeBillingRevenue_Summary '2023-02-01'
+
+dbo.sp_ComputeBillingRevenue_Detail '2023-01-01', '2023-01-31'
+EXEC sp_Insert_Overtime_Adjustments '2023-01-01'
+EXEC dbo.sp_ComputeBillingRevenue_Summary '2023-01-01'
+
+
